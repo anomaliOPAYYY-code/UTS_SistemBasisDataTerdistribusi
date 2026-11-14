@@ -1,0 +1,77 @@
+version: "3.9"
+
+services:
+  pg-primary:
+    image: postgres:15
+    container_name: pg-primary
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: secret
+      POSTGRES_DB: appdb
+    command: >
+      postgres
+      -c wal_level=replica
+      -c max_wal_senders=5
+      -c max_replication_slots=5
+      -c hot_standby=on
+    volumes:
+      - ./db-init/init.sql:/docker-entrypoint-initdb.d/init.sql
+      - pg_primary_vol:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  pg-replica:
+    image: postgres:15
+    container_name: pg-replica
+    depends_on:
+      pg-primary:
+        condition: service_healthy
+    environment:
+      PGPASSWORD: rep_secret
+    entrypoint: |
+      bash -c "
+      if [ ! -s /var/lib/postgresql/data/PG_VERSION ]; then
+        rm -rf /var/lib/postgresql/data/*
+        pg_basebackup -h pg-primary -D /var/lib/postgresql/data -U replicator -v -P -R -X stream -S replica_slot_1
+      fi;
+      exec docker-entrypoint.sh postgres -c hot_standby=on
+      "
+    volumes:
+      - pg_replica_vol:/var/lib/postgresql/data
+    ports:
+      - "5433:5432"
+
+  keycloak:
+    image: quay.io/keycloak/keycloak:24.0
+    container_name: keycloak
+    command: start-dev
+    environment:
+      KEYCLOAK_ADMIN: admin
+      KEYCLOAK_ADMIN_PASSWORD: admin
+    ports:
+      - "8080:8080"
+
+  backend-api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: backend-api
+    depends_on:
+      - pg-primary
+      - pg-replica
+      - keycloak
+    environment:
+      PRIMARY_DB_URL: postgresql://postgres:secret@pg-primary:5432/appdb
+      REPLICA_DB_URL: postgresql://postgres:secret@pg-replica:5432/appdb
+      KEYCLOAK_JWKS_URL: http://keycloak:8080/realms/sbdt-realm/protocol/openid-connect/certs
+    ports:
+      - "8000:8000"
+
+volumes:
+  pg_primary_vol:
+  pg_replica_vol:

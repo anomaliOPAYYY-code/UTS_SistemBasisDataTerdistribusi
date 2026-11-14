@@ -1,0 +1,55 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: pg-primary-headless
+spec:
+  clusterIP: None
+  selector:
+    app: pg-primary
+  ports:
+    - port: 5432
+      name: postgres
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: pg-primary
+spec:
+  serviceName: "pg-primary-headless"
+  replicas: 1
+  selector:
+    matchLabels:
+      app: pg-primary
+  template:
+    metadata:
+      labels:
+        app: pg-primary
+    spec:
+      containers:
+        - name: postgres
+          image: postgres:15
+          ports:
+            - containerPort: 5432
+          envFrom:
+            - secretRef:
+                name: sbdt-secret
+            - configMapRef:
+                name: sbdt-config
+          args:
+            - "-c"
+            - "wal_level=replica"
+            - "-c"
+            - "max_wal_senders=5"
+            - "-c"
+            - "hot_standby=on"
+          volumeMounts:
+            - name: primary-data
+              mountPath: /var/lib/postgresql/data
+  volumeClaimTemplates:
+    - metadata:
+        name: primary-data
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        resources:
+          requests:
+            storage: 2Gi

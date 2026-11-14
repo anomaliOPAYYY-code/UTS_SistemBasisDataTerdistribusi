@@ -1,0 +1,58 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: pg-replica-headless
+spec:
+  clusterIP: None
+  selector:
+    app: pg-replica
+  ports:
+    - port: 5432
+      name: postgres
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: pg-replica
+spec:
+  serviceName: "pg-replica-headless"
+  replicas: 1
+  selector:
+    matchLabels:
+      app: pg-replica
+  template:
+    metadata:
+      labels:
+        app: pg-replica
+    spec:
+      containers:
+        - name: postgres
+          image: postgres:15
+          ports:
+            - containerPort: 5432
+          env:
+            - name: PGPASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: sbdt-secret
+                  key: REPLICATOR_PASSWORD
+          command:
+            - bash
+            - -c
+            - |
+              if [ ! -s /var/lib/postgresql/data/PG_VERSION ]; then
+                rm -rf /var/lib/postgresql/data/*
+                pg_basebackup -h pg-primary-headless -D /var/lib/postgresql/data -U replicator -v -P -R -X stream
+              fi
+              exec docker-entrypoint.sh postgres -c hot_standby=on
+          volumeMounts:
+            - name: replica-data
+              mountPath: /var/lib/postgresql/data
+  volumeClaimTemplates:
+    - metadata:
+        name: replica-data
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        resources:
+          requests:
+            storage: 2Gi
